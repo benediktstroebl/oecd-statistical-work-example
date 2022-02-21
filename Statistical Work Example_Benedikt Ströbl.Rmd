@@ -1,0 +1,620 @@
+---
+title: "Statistical Work Example"
+author: "Benedikt Ströbl"
+date: "`r format(Sys.time(), '%B %d, %Y | %H:%M:%S | %Z')`"
+output:
+  html_document:
+    code_folding: show
+    df_print: paged
+    highlight: tango
+    number_sections: no
+    theme: cosmo
+    toc: no
+---
+  
+<style>
+div.answer {background-color:#f3f0ff; border-radius: 5px; padding: 20px;}
+</style>
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      eval = TRUE,
+                      error = FALSE,
+                      message = FALSE,
+                      warning = FALSE,
+                      comment = NA)
+```
+
+***
+
+```{r, include = T}
+library(tidyverse)
+library(tidymodels)
+library(haven)
+library(broom)
+library(colorspace)
+library(modelsummary)
+library(flextable)
+library(jtools)
+library(specr)
+library(kableExtra)
+```
+
+<br>
+
+***
+
+### Task 1 - Pruning the news feed [15 points in total]
+
+In her article ["Pruning the news feed: Unfriending and unfollowing political content on social media" (Research & Politics 2016)](https://doi.org/10.1177/2053168016661873), Leticia Bode explores the extent to which users exercise control over their social media experiences, and who tends to engage in avoidance of political information by unfriending people who post about politics on social media. In the following, you are asked to reproduce some of her findings presented in the paper. To do so, check out the paper (accessible under the link above; ungated) and work with the dataset `bode-pew-data.sav` that you find in your assignment repository.
+
+a) Reproduce **Figure 1**. Note that the corresponding variables in the dataset are named `ufptm`, `ufdo`, `ufa`, `ufdy`, `ufwo` (in the order that is shown in the original plot). The original plot has some bad/ugly features. When reproducing the figure, improve over the original design, and justify your design choices. [3 points]
+
+```{r}
+# Load data as tibble
+bode_pew_data <- as_tibble(read_sav("bode-pew-data.sav"))
+
+# Select relevant columns, drop NA values and calculate percentage per column
+df_bode_pew_data <- bode_pew_data %>%
+  select(ufptm, ufdo, ufa, ufdy, ufwo) %>%
+  drop_na() %>%
+  summarise(across(everything(),
+                   ~ sum(.) / n(),)) %>%
+  # Rename columns to explicit labels
+  rename(
+    "Posting too much" = ufptm,
+    "You disagree with them" = ufdo,
+    "They argued with you" = ufa,
+    "They disagree with you" = ufdy,
+    "Worried they'll offend friends" = ufwo
+  ) %>%
+  # Convert tibble to a longer format for plotting
+  pivot_longer(everything(),
+               names_to = "var_name") %>%
+  # Round value and transform to percentage
+  mutate(value = round(value, 3))
+
+# Plot: reorder columns by values and adding labels
+df_bode_pew_data %>%
+  ggplot(aes(
+    x = value,
+    xend = 0,
+    y = reorder(var_name, value),
+    yend = reorder(var_name, value),
+    label = value
+  )) +
+  # Draw line
+  geom_segment(size = 1,
+               color = "darkblue") +
+  # Plot lollipop heads
+  geom_point(size = 3,
+             color = "darkblue",) +
+  # Plot labels
+  geom_text(aes(label = paste0(value * 100, "%")),
+            hjust = 0.3,
+            vjust = 1.5) +
+  # Plot mean line
+  geom_vline(
+    xintercept = mean(df_bode_pew_data$value),
+    linetype = 2,
+    colour = "grey20"
+  ) +
+  # Plot mean line label
+  geom_text(aes(
+    x = mean(value),
+    y = 0,
+    label = "Mean",
+    hjust = -0.2,
+    vjust = -1
+  ),
+  family = "serif") +
+  # Labeling
+  labs(
+    x = "",
+    y = "",
+    title = expression(bold("Figure 1. ") ~ "Reasons for unfriending in social media")
+  ) +
+  # Set x-axis limits
+  scale_x_continuous(
+    labels = label_percent(1),
+    expand = c(0, 0),
+    limits = c(0, 0.11),
+    breaks = seq(0, 0.13, 0.02)
+  ) +
+  # Some styling
+  theme_bw() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    text = element_text(
+      color = "black",
+      family = "serif",
+      size = 14
+    ),
+    plot.title = element_text(size = 13)
+  )
+
+```
+
+<div class = "answer">
+- I added labels to the bars, since otherwise one cannot read the fine differences from the plot.
+- I sorted the bars in decreasing order to improve readability.
+- I flipped the whole chart to avoid line breaks in labels.
+- I used lollipop chart to give the plot a leaner look - bar width did not add any information to plot.
+- I added line indicating the mean to improve comparability between values.
+</div>
+
+<br>
+
+b) Reproduce the results from **Table 1** and present them in a clean table that is at least as informative as the original one. Discuss deviations from the original results if there are any. [3 points]
+
+```{r}
+# Create lm model with tidymodels
+lm_mod <-
+  linear_reg() %>%
+  set_engine("lm")
+
+lm_fit <-
+  lm_mod %>%
+  # Fit model with variables from paper
+  fit(
+    unfriendscale ~
+      gender +
+      age +
+      educ +
+      hisp +
+      nonwhite +
+      statedinc +
+      party3 +
+      ideostrength +
+      talkpol +
+      polfbmotiv +
+      friendspostpol +
+      disagree,
+    data = bode_pew_data
+  )
+
+# Plot modelsummary table of fitted model
+modelsummary(
+  statistic = NULL,
+  # Remove irrelevant column title
+  models = list(" " = lm_fit),
+  # Set table title
+  title = "<b>Table 1.</b> Predicting political unfriending.",
+  # Rounding numbers to two digits
+  fmt = "%.2f",
+  # Omit Intercept in table
+  coef_omit = "(Intercept)",
+  # Omit goodness-of-fit metrics
+  gof_omit = "Log|BIC",
+  # Plot estimate, std. error and significance stars for each IV
+  estimate = c("{estimate} ({std.error}){stars}"),
+  # Rename coefficients
+  coef_map = c(
+    "gender" = "Gender (f)",
+    "age" = "Age",
+    "educ" = "Education",
+    "hisp" = "Hispanic",
+    "nonwhite" = "Non-White",
+    "statedinc" = "Income",
+    "party3" = "Party (dependent variable)",
+    "ideostrength" = "Ideology strength",
+    "talkpol" = "Talk politics",
+    "polfbmotiv" = "Political social networking site motives",
+    "friendspostpol" = "Friends post-politics",
+    "disagree" = "Perceived disagreement"
+  ),
+  # Add note row that explains significance stars legend and dependent variable from paper
+  notes = list(
+    '<i>Note:</i> dependent variable is an index of five variables indicating different types of political unfriending',
+    '+ p < 0.1, * p < 0.05, ** p < 0.01, *** p < 0.001'
+  )
+) %>%
+  # Some styling of table
+  kable_classic(full_width = T, html_font = "serif") %>%
+  row_spec(13, extra_css = "border-top: 3px solid", hline_after = TRUE)
+  
+
+  
+
+```
+
+<div class = "answer">
+Compared to the table in the paper, there are three obvious differences in the results that are all linked to each other - 
+coefficient estimates, number of observations and the R2. 
+
+The differences in the coefficients might be due to errors in the data processing pipeline such as rounding or false treatment of NA values. 
+
+The number of observations are also differing quite significantly (602 vs. 2078). Considering the number of NA observations in the raw dataset and that `lm` ignores NA values when fitting the model, I assume that the Number of observations stated in the paper is wrong and inserted by mistake.
+
+Additionally, I included some Goodness of Fit measures into the table that give some further insights about the performance of the model. Visualizing the significance levels with stars is also best practice and contributes to the readability of the table.
+
+</div>
+
+<br>
+
+c) Offer a visual representation of the results provided in Table 1 using a well-designed coefficient plot. [2 points]
+
+```{r}
+# Use plot_summs for easy & pretty coefficient plotting
+lm_fit %>%
+  plot_summs(
+    scale = TRUE,
+    colors = "darkblue",
+    # Again omit Intercept in plot
+    omit.coefs = "(Intercept)",
+    # Rename coefficients
+    coefs = c(
+      "Gender (f)" = "gender",
+      "Age" = "age",
+      "Education" = "educ",
+      "Hispanic" = "hisp",
+      "Non-White" = "nonwhite",
+      "Income" = "statedinc",
+      "Party (dependent variable)" = "party3",
+      "Ideology strength" = "ideostrength",
+      "Talk politics" = "talkpol",
+      "Political social networking site motives" = "polfbmotiv",
+      "Friends post-politics" = "friendspostpol",
+      "Perceived disagreement" = "disagree"
+    )
+  ) +
+  # Set breaks and limits of x-axis
+  scale_x_continuous(breaks = seq(-0.1, 0.1, 0.025),) +
+  # Some labels
+  labs(
+    x = "Estimates",
+    y = "",
+    title = "Coefficient plot: Predicting political unfriending",
+    caption = "Estimates and 95%-Confidence intervals"
+  ) +
+  # Styling
+  theme_bw() +
+  theme(
+    text = element_text(
+      family = "serif",
+      colour = "black",
+      size = 14
+    ),
+    plot.title = element_text(size = 13)
+  )
+
+
+```
+
+<br>
+
+d) Run `lm` models for all possible combinations of covariates from the original model and store the estimates. Then, provide visual evidence how the estimates for the four key predictors of interest (linked to H1A, H1B, H2, and H3) vary across those specifications, and briefly discuss your findings. [3 points]
+
+```{r}
+# Use function from lecture to fit all possible specifications given a set of variables
+combn_models <- function(depvar, covars, data) {
+  combn_list <- list()
+  for (i in seq_along(covars)) {
+    combn_list[[i]] <- combn(covars, i, simplify = FALSE)
+  }
+  combn_list <- unlist(combn_list, recursive = FALSE)
+  # function to generate formulas
+  gen_formula <- function(covars, depvar) {
+    form <-
+      as.formula(paste0(depvar, " ~ ", paste0(covars, collapse = "+")))
+    form
+  }
+  # generate formulas
+  formulas_list <-
+    purrr::map(combn_list, gen_formula, depvar = depvar)
+  # run models
+  models_list <- purrr::map(formulas_list, lm, data = data)
+  models_list
+}
+
+# Store combinations in list
+models_list <-
+  combn_models(
+    depvar = "unfriendscale",
+    covars = c(
+      "gender",
+      "age",
+      "educ",
+      "hisp",
+      "nonwhite",
+      "statedinc",
+      "party3",
+      "ideostrength",
+      "talkpol",
+      "polfbmotiv",
+      "friendspostpol",
+      "disagree"
+    ),
+    data = bode_pew_data
+  )
+
+# Labels for plotting
+facet_labels <- c(
+  ideostrength = "Ideology strength",
+  talkpol = "Talk politics",
+  friendspostpol = "Friends post-politics",
+  disagree = "Perceived disagreement"
+)
+
+# Extract coefficients of predictors across all specifications and store into new tibble
+models_hyp_coef <- tibble(models = models_list %>% pluck()) %>%
+  # Extract coefficients
+  mutate(
+    ideostrength = map_dfr(models, ~ coefficients(.x) %>% pluck())$ideostrength,
+    talkpol = map_dfr(models, ~ coefficients(.x) %>% pluck())$talkpol,
+    friendspostpol = map_dfr(models, ~ coefficients(.x) %>% pluck())$friendspostpol,
+    disagree = map_dfr(models, ~ coefficients(.x) %>% pluck())$disagree,
+  ) %>%
+  # Drop models columns
+  select(-models)
+
+models_hyp_coef %>%
+  # Convert to longer table format
+  pivot_longer(cols = everything(),
+               names_to = "coef",
+               values_to = "value") %>%
+  # Drop NA coefficient values
+  drop_na(value) %>%
+  # Plot coefficients
+  ggplot(aes(x = value,
+             y = -10,)) +
+  # Adding Boxplot underneath density curves
+  geom_boxplot(aes(fill = coef), width = 10) +
+  # Plotting density plot for each predictor
+  geom_density(aes(x = value,
+                   fill = coef,
+                   color = coef),
+               alpha = 0.25,
+               inherit.aes = FALSE) +
+  facet_wrap( ~ coef, labeller = as_labeller(facet_labels)) +
+  # Some styling
+  theme_minimal() +
+  theme(
+    text = element_text(
+      family = "serif",
+      color = "black",
+      size = 14
+    ),
+    plot.title = element_text(size = 13),
+    legend.position = "none"
+  ) +
+  # Again labels
+  labs(y = "Density",
+       x = "Estimate",
+       title = "Distribution of key predictors across specifications")
+
+
+# DETOUR
+# Second Plot that includes at least ALL four of the key predictors
+tibble(models = models_list %>% pluck()) %>%
+  # Filter for models that contain ALL four key predictors
+  filter(map_lgl(models,
+                 ~ all(
+                   c("ideostrength", "talkpol", "friendspostpol", "disagree") %in%
+                     (.x %>%
+                        coef() %>%
+                        names())
+                 ))) %>%
+  # Extract coefficients
+  mutate(
+    ideostrength = map(models, ~ coefficients(.x) %>% pluck("ideostrength")) %>% unlist(),
+    talkpol = map(models, ~ coefficients(.x) %>% pluck("talkpol")) %>% unlist(),
+    friendspostpol = map(models, ~ coefficients(.x) %>% pluck("friendspostpol")) %>% unlist(),
+    disagree = map(models, ~ coefficients(.x) %>% pluck("disagree")) %>% unlist(),
+  ) %>%
+  # Drop models columns
+  select(-models) %>%
+  # Convert to longer table format
+  pivot_longer(cols = everything(),
+               names_to = "coef",
+               values_to = "value") %>%
+  # Plot coefficients
+  ggplot(aes(x = value,
+             y = -30,)) +
+  # Adding Boxplot underneath density curves
+  geom_boxplot(aes(fill = coef), width = 30) +
+  # Plotting density plot for each predictor
+  geom_density(aes(x = value,
+                   fill = coef,
+                   color = coef),
+               alpha = 0.25,
+               inherit.aes = FALSE) +
+  facet_wrap( ~ coef, labeller = as_labeller(facet_labels)) +
+  # Some styling
+  theme_minimal() +
+  theme(
+    text = element_text(
+      family = "serif",
+      color = "black",
+      size = 14
+    ),
+    plot.title = element_text(size = 13),
+    legend.position = "none"
+  ) +
+  # Again labels
+  labs(y = "Density",
+       x = "Estimate",
+       title = "Distribution of key predictors across specifications")
+
+
+```
+
+<div class = "answer">
+What we observe is that `Friends post-politics (H2)` and `Talk politics (H1B)` are roughly normal distributed with the latter having a higher variance. `Perceived disagreement (H3)` and  `Ideology strength (H1A)`, however, show a bimodal distribution, since we can observe two 'peaks'. We can also observe that the estimates of `perceived disagreement (H3)` and `Talk politics (H1B)` are on average smaller than for the other two variables. Since these distributions neglect the significance of the coefficients across the specifications, we cannot infer much about the effects from these plots. 
+
+Further, we get slightly different results if we only include those models that incorporate at least **all** four of the key predictors. Especially for `Perceived disagreement (H3)`, this could mean that there might be some effects between the predictor variables. (see below)
+</div>
+
+<br>
+
+e) Run a specification curve analysis for one of the four effects of interest. When doing so, come up with (a) an alternative measure of the response (can be just a transformation of the original measure), (b) an alternative key predictor measure (can be just a transformation of the original measure), and (c) different subsets of the data. More plausible criteria to generate alternative specifications are possible. Briefly discuss the results.  [4 points]
+
+```{r}
+# Calculate unfriendscale mean for subsetting
+mean_unfriendscale <- bode_pew_data %>%
+  summarise(mean = mean(unfriendscale, na.rm = TRUE)) %>%
+  pull(mean)
+
+# Create additional column `language` for subsetting of data in spec. curve analysis
+bode_pew_data_spec_curve <- bode_pew_data %>%
+  mutate(
+    language = case_when(lang == 1 ~ "English", lang == 2 ~ "Spanish"),
+    # Add dummy response variable with mean as divider
+    unfriendscale_highlow = case_when(unfriendscale > mean_unfriendscale ~ 1, TRUE ~ 0)
+  )
+
+results <- run_specs(
+  df = bode_pew_data_spec_curve,
+  # Response variables
+  y = c("unfriendscale", "unfriendscale_highlow"),
+  # Alternative measure for predictor is squared
+  x = c("ideostrength", "I(ideostrength^2)"),
+  model = c("lm"),
+  controls = c(
+    "gender",
+    "age",
+    "educ",
+    "hisp",
+    "nonwhite",
+    "statedinc",
+    "party3",
+    "polfbmotiv",
+    "disagree",
+    "talkpol",
+    "friendspostpol"
+  ),
+  # Use language variable for subsetting
+  subsets = list(language = unique(
+    na.omit(bode_pew_data_spec_curve$language)
+  ))
+)
+
+# Plot decision tree
+plot_decisiontree(results, legend = TRUE)
+
+# Plot specifications
+plot_specs(results,
+           rel_heights = c(4, 8))
+
+
+```
+
+<div class = "answer">
+It becomes obvious that for the dummy response variable `unfriendscale_highlow`, we get the highest significant estimates.
+This dummy is equal to 1 if the original `unfriendscale` value is bigger than its mean over all observations. Otherwise its value is 0. 
+
+Further, we can see that overall when comparing `ideostrength` and `ideostrength^2`, estimates are smaller for the squared measure.
+Therefore, it might be better to stick with the unsquared measure when deriving a *best* specification. 
+
+Interestingly, we find that even though the highest estimates are for the `Spanish` subset, none of these specifications is significant. That is very likely to be a consequence of the low number of observations for the `Spanish` subset (N = 114) when compared to the `English` subset (N = 2139).
+</div>
+
+<br>
+
+### Task 2 - Predicting y [3 points in total]
+
+It's Friday evening and your somewhat nerdy friend visits you in your apartment. In her luggage she has a USB stick, on which you find the file `PrEdIcTiOn.csv`. She explains that her boss gave her this stick today together with the following task: 
+
+*The dataset contains one response variable `y` and 10 predictor variables `c1` to `c10`. There are various plausible explanations for the `y` values using the other variables in the dataset, but one of them is the most plausible of all. Provide the best explanation or prediction of `y` using one, several, or all predictors at once. In the end, provide an explanation of how the `y` values were generated (some noise will likely be part of the story)!*
+
+You decide to help your friend because she's promised to help you with your public policy assignment in return. What is your solution?
+ 
+```{r}
+# Read csv and scale / centre numeric variables
+prediction_data <-
+  read.csv("PrEdIcTiOn.csv") %>% mutate(across(where(is.numeric), scale))
+
+# Again fit all possible specifications and store them into a list
+pred_models_list <-
+  combn_models("y",
+               c("c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10"),
+               prediction_data)
+
+best_model_fit <- tibble(model = pred_models_list) %>%
+  mutate(# Compute adjusted R2 for all models and store them in new column
+    r2_adj = map(model, ~ summary(.x)$adj.r.squared) %>% unlist()) %>%
+  # Filter for the model with the highest adjusted R2 (highest explained variance while account for number of predictors)
+  arrange(desc(r2_adj)) %>%
+  select(model) %>%
+  pluck(1) %>%
+  pluck(1)
+
+# Plot coefficient table to summarize best model specification
+modelsummary(
+  statistic = NULL,
+  models = list(" " = best_model_fit),
+  title = "Model specification with highest R2 Adjusted",
+  fmt = "%.2f",
+  coef_omit = "(Intercept)",
+  gof_omit = "Log|BIC|F",
+  estimate = c("{estimate} ({std.error}){stars}"),
+  notes = list('+ p < 0.1, * p < 0.05, ** p < 0.01, *** p < 0.001')
+) %>%
+  kable_classic(full_width = T, html_font = "serif") %>%
+  row_spec(9, extra_css = "border-top: 3px solid", hline_after = TRUE)
+
+# Additionally plot coefficient plot from Task 1 to visualize effect sizes and standard error
+plot_summs(best_model_fit,
+           colors = "darkblue") +
+  # Set breaks and limits of x-axis
+  scale_x_continuous(breaks = seq(-0.4, 0.4, 0.1), ) +
+  # Some labels
+  labs(
+    x = "Estimates",
+    y = "",
+    title = "Coefficient plot: Best model specification",
+    caption = "Estimates and 95%-Confidence intervals"
+  ) +
+  # Styling
+  theme_bw() +
+  theme(
+    text = element_text(
+      family = "serif",
+      colour = "black",
+      size = 14
+    ),
+    plot.title = element_text(size = 13)
+  )
+
+#From the following scatterplots we can also clearly see that only the highly significant predictors from our model show a clear association with Y, which corroborates our findings
+prediction_data %>%
+  pivot_longer(c1:c10, names_to = "predictors", values_to = "values") %>%
+  # Relevel factors to sort facetted plots
+  mutate(predictors = fct_relevel(
+    predictors,
+    c("c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10")
+  )) %>%
+  ggplot(aes(x = values,
+             y = y)) +
+  geom_point(alpha = 0.2) +
+  geom_smooth(method = lm) +
+  scale_x_continuous(breaks = c(-5, 0, 5),
+                     limits = c(-5.5, 5.5)) +
+  scale_y_continuous(breaks = c(-2, 0, 2),
+                     limits = c(-2, 2)) +
+  facet_wrap(~ predictors) +
+  labs(x = "Values",
+       y = "Y",
+       title = "Relationships with Y") +
+  theme_minimal() +
+  theme(text = element_text(family = "serif", ),
+        strip.text.x = element_text(
+          size = 10,
+          face = "bold"))
+
+
+```
+
+<div class = "answer">
+We can see that the linear model that includes all variables except c7 and c10 has the highest adjusted R2 across all specifications. The adjusted R2 of 0.937 indicates that this specification explains 93.7% of the variance in `y`.
+
+The predictors c1, c2, c3, c5, c8 and c9 are all highly significant with p < 0.001. c4 and c6, however, are not significant. 
+
+We can also see (since we centered and standardized our data) that c8, c9 seem to have the largest positive effect sizes on y, while c1 has the largest negative effect size.
+
+The additional scatterplots that shows the individual relatonships of the predictors with Y again corroborate our model findings, since only the significant variables show a clear association with Y.
+
+*Note:* During calculation and sorting of the adj. r2 of the models, it seemed like there are multiple models with the same r2 metric. However, this is because dplyr silently rounds this value during sorting and the r2 values actually differ when one considers more decimals. Therefore, there is a *true* maximum adj. r2 value.
+
+</div>
+
